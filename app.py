@@ -7,7 +7,7 @@ import json
 
 app = Flask(__name__)
 # Enable CORS for all routes and all methods
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173"]}})
 
 @app.route("/")
 def home():

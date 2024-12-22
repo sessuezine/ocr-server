@@ -22,46 +22,39 @@ CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "http://127.0.
 @app.route('/ocr_local', methods=['POST'])
 def ocr_local():
     try:
-        # Step 1: Load the uploaded file
+        # Step 1: Load the image
         file = request.files.get('image')
         if not file:
-            print("Error: No image provided in the request.")
+            print("Error: No image provided.")
             return jsonify({"error": "No file provided"}), 400
 
-        file.save("./debug/uploaded_image.png")
-        print("Saved uploaded image to ./debug/uploaded_image.png")
-
-        # Step 2: Open the image
         image = Image.open(file.stream)
-        print("Successfully loaded the image.")
+        image.save("./debug/original_uploaded_image.png")
 
-        # Step 3: Handle orientation
-        orientation = request.form.get('orientation', 'horizontal')
-        print(f"Received orientation: {orientation}")
+        # Step 2: Normalize EXIF orientation
+        image = ImageOps.exif_transpose(image)
+        image.save("./debug/exif_corrected_image.png")
 
-        # Step 4: Convert to grayscale and apply binarization
+        # Step 3: Convert to grayscale and binarize
         image = ImageOps.grayscale(image)
+        image.save("./debug/after_grayscale_image.png")
+
         image_array = np.array(image)
         _, binary_image = cv2.threshold(image_array, 128, 255, cv2.THRESH_BINARY)
-        image = Image.fromarray(binary_image)
-        print("Applied binarization.")
+        final_image = Image.fromarray(binary_image)
+        final_image.save("./debug/final_binarized_image.png")
 
-        # Save binarized image for debugging
-        image.save(f"./debug/binarized_image_{orientation}.png")
-        print(f"Saved binarized image to ./debug/binarized_image_{orientation}.png")
-
-        # Step 5: OCR processing based on orientation
+        # Step 4: OCR logic
+        orientation = request.form.get('orientation', 'horizontal')
+        print(f"Orientation received: {orientation}")
         if orientation == 'vertical':
-            print("Processing as vertical text with detection.")
-            results = process_vertical_lines_with_detection(image)
+            print("Processing vertical image.")
+            results = process_vertical_lines_with_detection(final_image)
         else:
-            print("Processing as horizontal text.")
-            results = reader.readtext(np.array(image), detail=0)
+            print("Processing horizontal image.")
+            results = reader.readtext(np.array(final_image), detail=0)
 
-        # Log the OCR results for debugging
         print(f"OCR Results: {results}")
-
-        # Step 6: Return the results
         return jsonify({"text": results})
 
     except Exception as e:

@@ -4,12 +4,12 @@ import easyocr
 from io import BytesIO
 from PIL import Image, ImageOps
 import json
-import os 
+import os
+import cv2
+import numpy as np
 
 # Make debug folder if it does not exist
 os.makedirs("./debug", exist_ok=True)
-
-import requests
 
 app = Flask(__name__)
 
@@ -19,96 +19,101 @@ reader = easyocr.Reader(['ja'], gpu=False)
 # Enable CORS for all routes and all methods
 CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173"]}})
 
-@app.route("/")
-def home():
-    return "Flask server is running with CORS enabled!"
-
-@app.route('/ocr', methods=['POST'])
-def ocr():
-    try:
-        data = request.json
-        image_url = data.get('image_url')
-
-        if not image_url:
-            return jsonify({"error": "No image_url provided"}), 400
-
-        # Fetch the image
-        response = requests.get(image_url)
-        image = Image.open(BytesIO(response.content))
-
-        # Perform OCR
-        results = reader.readtext(image, detail=0)
-
-        return jsonify({"text": results})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.route('/ocr_local', methods=['POST'])
 def ocr_local():
     try:
-        # Get the uploaded file
+        # Step 1: Load the uploaded file
         file = request.files.get('image')
         if not file:
+            print("Error: No image provided in the request.")
             return jsonify({"error": "No file provided"}), 400
-        
-        # Save the uploaded file for debugging
+
         file.save("./debug/uploaded_image.png")
+        print("Saved uploaded image to ./debug/uploaded_image.png")
 
-        # Open the image using PIL
+        # Step 2: Open the image
         image = Image.open(file.stream)
+        print("Successfully loaded the image.")
 
-        # Retrieve orientation from the request (sent from the frontend)
+        # Step 3: Handle orientation
         orientation = request.form.get('orientation', 'horizontal')
+        print(f"Received orientation: {orientation}")
 
-        # Rotate if vertical orientation is detected
-        rotation_angle = 90 if orientation == 'vertical' else 0
-        if rotation_angle:
-            image = image.rotate(rotation_angle, expand=True)
-
-        # Save the rotated image for debugging
-        image.save(f"./debug/rotated_image_{orientation}.png")
-
-        # Convert to grayscale
+        # Step 4: Convert to grayscale and apply binarization
         image = ImageOps.grayscale(image)
+        image_array = np.array(image)
+        _, binary_image = cv2.threshold(image_array, 128, 255, cv2.THRESH_BINARY)
+        image = Image.fromarray(binary_image)
+        print("Applied binarization.")
 
-        # Convert the PIL image to bytes
-        image_bytes = BytesIO()
-        image.save(image_bytes, format='PNG')  # Save as PNG
-        image_bytes = image_bytes.getvalue()
+        # Save binarized image for debugging
+        image.save(f"./debug/binarized_image_{orientation}.png")
+        print(f"Saved binarized image to ./debug/binarized_image_{orientation}.png")
 
-        # Perform OCR
-        results = reader.readtext(image_bytes, detail=0)
+        # Step 5: OCR processing based on orientation
+        if orientation == 'vertical':
+            print("Processing as vertical text with detection.")
+            results = process_vertical_lines_with_detection(image)
+        else:
+            print("Processing as horizontal text.")
+            results = reader.readtext(np.array(image), detail=0)
 
-        # Prepare the response
-        response_data = {"text": results}
+        # Log the OCR results for debugging
+        print(f"OCR Results: {results}")
 
-        # Return unescaped JSON
-        return Response(
-            json.dumps(response_data, ensure_ascii=False),
-            content_type="application/json; charset=utf-8"
-        )
+        # Step 6: Return the results
+        return jsonify({"text": results})
+
     except Exception as e:
-        # Log the error for debugging
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+def detect_text_regions(image):
+    """Detect regions containing text using contours."""
+    image_array = np.array(image)
 
-def process_vertical_text(image, character_height):
-    width, height = image.size
+    # Find contours
+    contours, _ = cv2.findContours(image_array, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Filter out regions based on size
+    text_regions = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w > 5 and h > 20:  # Adjusted thresholds for vertical text
+            text_regions.append((x, y, w, h))
+
+    # Sort regions from top to bottom
+    text_regions = sorted(text_regions, key=lambda r: r[1])
+    print(f"Detected text regions: {text_regions}")
+    return text_regions
+
+def process_vertical_lines_with_detection(image):
+    """Process vertical text by detecting regions."""
+    text_regions = detect_text_regions(image)
+    print(f"Detected text regions for vertical text: {text_regions}")
+
     results = []
-    for top in range(0, height, character_height):
-        box = (0, top, width, min(top + character_height, height))
-        char_crop = image.crop(box)
-        text = reader.readtext(char_crop, detail=0)
-        results.append(text[0] if text else "")
-    return "".join(results)
+    for idx, (x, y, w, h) in enumerate(text_regions):
+        # Crop the region
+        region = image.crop((x, y, x + w, y + h))
+        region.save(f"./debug/vertical_crop_{idx}.png")
+        print(f"Saved cropped region {idx} to ./debug/vertical_crop_{idx}.png")
 
+        # Convert to binary and perform OCR
+        region_array = np.array(region)
+        _, binary_region = cv2.threshold(region_array, 128, 255, cv2.THRESH_BINARY)
+        binary_image = Image.fromarray(binary_region)
+        text = reader.readtext(np.array(binary_image), detail=0)
+        print(f"OCR result for region {idx}: {text}")
 
-# Print all registered routes
-print("\nRegistered Routes:")
-for rule in app.url_map.iter_rules():
-    print(f"Route: {rule} -> {rule.endpoint}")
+        # Append all detected text to results
+        if text:
+            results.extend(text)  # Append all detected text items instead of just the first one
+
+    # Return results as a list to ensure consistent format
+    return results
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)

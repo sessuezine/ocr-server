@@ -117,40 +117,48 @@ def split_large_regions(image, region, min_char_width=10, min_char_height=10):
 
     return subregions
 
-
 def process_vertical_lines_with_detection(image):
-    """Process vertical text by detecting regions with dynamic padding."""
+    """Process vertical text by detecting and refining regions."""
+    # Step 1: Detect text regions
     text_regions = detect_text_regions(image)
-    print(f"Detected text regions for vertical text: {text_regions}")
+    print(f"Detected text regions: {text_regions}")
+
+    # Step 2: Sort regions top-to-bottom
+    text_regions = sorted(text_regions, key=lambda r: r[1])  # Sort by Y-coordinate
+    print(f"Sorted text regions (top-to-bottom): {text_regions}")
 
     results = []
 
     for idx, (x, y, w, h) in enumerate(text_regions):
-        # Calculate dynamic padding based on region size
-        base_padding = int(min(w, h) * 0.2)  # 20% of the smaller dimension
-        density_padding = estimate_density_padding(image, x, y, w, h)
-        dynamic_padding = max(base_padding, density_padding)  # Choose the larger padding
+        try:
+            # Step 3: Calculate dynamic padding
+            base_padding = int(min(w, h) * 0.2)  # 20% of the smaller dimension
+            density_padding = estimate_density_padding(image, x, y, w, h)
+            dynamic_padding = max(base_padding, density_padding)  # Use the larger of the two
 
-        # Adjust coordinates with dynamic padding
-        padded_x = max(x - dynamic_padding, 0)
-        padded_y = max(y - dynamic_padding, 0)
-        padded_w = min(w + 2 * dynamic_padding, image.width - padded_x)
-        padded_h = min(h + 2 * dynamic_padding, image.height - padded_y)
+            # Adjust coordinates with dynamic padding
+            padded_x = max(x - dynamic_padding, 0)
+            padded_y = max(y - dynamic_padding, 0)
+            padded_w = min(x + w + dynamic_padding, image.size[0])
+            padded_h = min(y + h + dynamic_padding, image.size[1])
 
-        # Crop the region with dynamic padding
-        region = image.crop((padded_x, padded_y, padded_x + padded_w, padded_y + padded_h))
-        region.save(f"./debug/vertical_crop_{idx}.png")
-        print(f"Saved cropped region {idx} to ./debug/vertical_crop_{idx}.png")
+            # Step 4: Crop the region with dynamic padding
+            region = image.crop((padded_x, padded_y, padded_w, padded_h))
+            region.save(f"./debug/vertical_crop_{idx}.png")  # Save for debugging
+            print(f"Saved cropped region {idx} to ./debug/vertical_crop_{idx}.png")
 
-        # Perform OCR directly
-        text = reader.readtext(np.array(region), detail=0)
-        print(f"OCR result for region {idx}: {text}")
+            # Step 5: Perform OCR on the region
+            text = reader.readtext(np.array(region), detail=0)
+            print(f"OCR result for region {idx}: {text}")
 
-        # Append all detected text to results
-        if text:
+            # Append the OCR result directly
             results.extend(text)
+        except Exception as e:
+            print(f"Error processing region {idx}: {e}")
+            continue
 
     return results
+
 
 def estimate_density_padding(image, x, y, w, h):
     """Estimate additional padding based on the pixel density near the region's edges."""
